@@ -1,3 +1,4 @@
+#include "overlay/imgui_compat.h"
 #include "overlay/steam_overlay_stats.h"
 // translation
 #include "overlay/steam_overlay_translations.h"
@@ -103,7 +104,7 @@ void Steam_Overlay_Stats::render_stats(int current_language)
         update_playtime(now);
     }
 
-    ImGui::PushFont(font);
+    overlay_imgui_compat::PushFont(font);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, settings->overlay_appearance.notification_rounding);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);

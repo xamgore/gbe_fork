@@ -6,6 +6,7 @@
 // avoids confusing ImGui when another label has the same text "MyText"
 
 #include "overlay/steam_overlay.h"
+#include "overlay/imgui_compat.h"
 
 #include <thread>
 #include <string>
@@ -495,7 +496,7 @@ void Steam_Overlay::create_fonts()
     font_ach_desc = add_overlay_font(font_size_ach_desc, settings->overlay_appearance.font_override_ach_desc);
     stats.font = font_fps;
 
-    bool res = fonts_atlas.IsBuilt();
+    bool res = overlay_imgui_compat::IsFontAtlasBuilt(fonts_atlas);
     PRINT_DEBUG("isbuilt fonts atlas (result=%i)", (int)res);
 
     reset_LastError();
@@ -1060,7 +1061,7 @@ void Steam_Overlay::set_next_notification_pos(std::pair<float, float> scrn_size,
 
         const auto &ach = noti.ach.value();
         const float ach_text_width = noti_width - padding_all_sides - global_style.ItemSpacing.x - settings->overlay_appearance.icon_size;
-        ImGui::PushFont(font_ach_title);
+        overlay_imgui_compat::PushFont(font_ach_title);
         float new_msg_height = ImGui::CalcTextSize(
             ach.title.c_str(),
             ach.title.c_str() + ach.title.size(),
@@ -1069,7 +1070,7 @@ void Steam_Overlay::set_next_notification_pos(std::pair<float, float> scrn_size,
         ).y;
         ImGui::PopFont();
         if (ach.description.size()) {
-            ImGui::PushFont(font_ach_desc);
+            overlay_imgui_compat::PushFont(font_ach_desc);
             new_msg_height += global_style.ItemSpacing.y + ImGui::CalcTextSize(
                 ach.description.c_str(),
                 ach.description.c_str() + ach.description.size(),
@@ -1235,7 +1236,7 @@ void Steam_Overlay::build_notifications(float width, float height)
     auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
     std::queue<Friend> friend_actions_temp{};
 
-    ImGui::PushFont(font_notif);
+    overlay_imgui_compat::PushFont(font_notif);
     // Add window rounding
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, settings->overlay_appearance.notification_rounding);
 
@@ -1318,22 +1319,22 @@ void Steam_Overlay::build_notifications(float width, float height)
                         ImGui::TableSetColumnIndex(0);
                         ImGui::Image(icon_rsrc->GetResourceId(), ImVec2(settings->overlay_appearance.icon_size, settings->overlay_appearance.icon_size));
                         ImGui::TableSetColumnIndex(1);
-                        ImGui::PushFont(font_ach_title);
+                        overlay_imgui_compat::PushFont(font_ach_title);
                         ImGui::TextWrapped("%s", ach.title.c_str());
                         ImGui::PopFont();
                         if (ach.description.size()) {
-                            ImGui::PushFont(font_ach_desc);
+                            overlay_imgui_compat::PushFont(font_ach_desc);
                             ImGui::TextWrapped("%s", ach.description.c_str());
                             ImGui::PopFont();
                         }
 
                         ImGui::EndTable();
                     } else {
-                        ImGui::PushFont(font_ach_title);
+                        overlay_imgui_compat::PushFont(font_ach_title);
                         ImGui::TextWrapped("%s", ach.title.c_str());
                         ImGui::PopFont();
                         if (ach.description.size()) {
-                            ImGui::PushFont(font_ach_desc);
+                            overlay_imgui_compat::PushFont(font_ach_desc);
                             ImGui::TextWrapped("%s", ach.description.c_str());
                             ImGui::PopFont();
                         }
@@ -1400,11 +1401,11 @@ void Steam_Overlay::build_notifications(float width, float height)
                         const ImVec2 lo(border_min.x - expand, border_min.y - expand);
                         const ImVec2 hi(border_max.x + expand, border_max.y + expand);
                         const int a = (int)(180.0f * (1.0f - (float)(i - 1) / (float)steps) * settings_noti_alpha);
-                        dl->AddRect(lo, hi, IM_COL32(218, 165, 32, a), rounding + expand, 0, 2.0f);
+                        overlay_imgui_compat::AddRect(dl, lo, hi, IM_COL32(218, 165, 32, a), rounding + expand, 0, 2.0f);
                     }
                     dl->PopClipRect();
 
-                    ImGui::GetWindowDrawList()->AddRect(
+                    overlay_imgui_compat::AddRect(ImGui::GetWindowDrawList(),
                         border_min,
                         border_max,
                         IM_COL32(255, 215, 90, (int)(220.0f * settings_noti_alpha)),
@@ -1418,7 +1419,7 @@ void Steam_Overlay::build_notifications(float width, float height)
                     const ImU32 accent_color = ImGui::ColorConvertFloat4ToU32(
                         ImVec4(1.0f, 1.0f, 1.0f, 0.82f * settings_noti_alpha));
 
-                    ImGui::GetWindowDrawList()->AddRect(
+                    overlay_imgui_compat::AddRect(ImGui::GetWindowDrawList(),
                         inner_min,
                         inner_max,
                         accent_color,
@@ -1596,7 +1597,7 @@ void Steam_Overlay::post_achievement_notification(Overlay_Achievement &ach, bool
     // Update last scheduled show time for next item
     last_scheduled_show_time = scheduled_show_time;
 
-    PRINT_DEBUG("Achievement queued: '%s', scheduled for %lld ms, delay=%d ms", 
+    PRINT_DEBUG("Achievement queued: '%s', scheduled for %lld ms, delay=%d ms",
                 ach.name.c_str(), (long long)scheduled_show_time.count(), delay_ms);
 }
 
@@ -1634,7 +1635,7 @@ void Steam_Overlay::process_achievement_queue()
             // Play sound when notification is actually shown (delayed with queue)
             notify_sound_user_achievement();
 
-            PRINT_DEBUG("Achievement shown: '%s' at %lld ms", 
+            PRINT_DEBUG("Achievement shown: '%s' at %lld ms",
                         scheduled_ach.ach.name.c_str(), (long long)now.count());
 
             // Remove from queue
@@ -1917,7 +1918,7 @@ void Steam_Overlay::render_main_window()
 
     ImGuiIO &io = ImGui::GetIO();
 
-    ImGui::PushFont(font_default);
+    overlay_imgui_compat::PushFont(font_default);
     uint32 style_color_stack = apply_global_style_color();
 
     ImGui::SetNextWindowPos({ 0, 0 });
@@ -2008,7 +2009,7 @@ void Steam_Overlay::render_main_window()
                 show_settings = !show_settings;
             }
         }
-        
+
         ImGui::Spacing();
         ImGui::Spacing();
         // user clicked on "FPS"
@@ -2018,7 +2019,7 @@ void Steam_Overlay::render_main_window()
                 allow_renderer_frame_processing(stats.show_fps);
             }
         }
-        
+
         // user clicked on "Frametime"
         ImGui::SameLine();
         if (settings->overlay_show_checkbox_frametime) {
@@ -2026,7 +2027,7 @@ void Steam_Overlay::render_main_window()
                 allow_renderer_frame_processing(stats.show_frametime);
             }
         }
-        
+
         // user clicked on "Playtime"
         ImGui::SameLine();
         if (settings->overlay_show_checkbox_playtime) {
@@ -2034,7 +2035,7 @@ void Steam_Overlay::render_main_window()
                 allow_renderer_frame_processing(stats.show_playtime);
             }
         }
-        
+
         ImGui::Spacing();
         ImGui::Spacing();
 
@@ -2233,10 +2234,10 @@ void Steam_Overlay::render_main_window()
                                         ImVec2 lo(icon_min.x - expand, icon_min.y - expand);
                                         ImVec2 hi(icon_max.x + expand, icon_max.y + expand);
                                         int a = (int)(90.0f * (1.0f - (float)(i - 1) / (float)steps));
-                                        dl->AddRect(lo, hi, IM_COL32(218, 165, 32, a), rounding + expand, 0, 2.0f);
+                                        overlay_imgui_compat::AddRect(dl, lo, hi, IM_COL32(218, 165, 32, a), rounding + expand, 0, 2.0f);
                                     }
                                     // Solid bright inner line
-                                    dl->AddRect(icon_min, icon_max,
+                                    overlay_imgui_compat::AddRect(dl, icon_min, icon_max,
                                                 IM_COL32(255, 215, 90, 220), rounding, 0, 2.0f);
                                     dl->PopClipRect();
                                 }
@@ -3142,7 +3143,7 @@ void Steam_Overlay::render_gallery_window()
 {
     if (!show_screenshots_window) return;
 
-    ImGui::PushFont(font_default);
+    overlay_imgui_compat::PushFont(font_default);
     uint32 style_color_stack = apply_global_style_color();
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(8192, 8192));
@@ -3864,7 +3865,7 @@ Steam_Overlay::CropAction Steam_Overlay::render_crop_editor(
         dl->AddRectFilled(s0, s1, IM_COL32(255, 255, 255, 30));
     }
     // Border
-    dl->AddRect(s0, s1, IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
+    overlay_imgui_compat::AddRect(dl, s0, s1, IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
 
     // 3) 8 handles (4 corners + 4 edge midpoints)
     ImVec2 corners[8] = {
@@ -3882,7 +3883,7 @@ Steam_Overlay::CropAction Steam_Overlay::render_crop_editor(
             ImVec2(corners[i].x - kHandlePx * 0.5f, corners[i].y - kHandlePx * 0.5f),
             ImVec2(corners[i].x + kHandlePx * 0.5f, corners[i].y + kHandlePx * 0.5f),
             IM_COL32(255, 255, 255, 255));
-        dl->AddRect(
+        overlay_imgui_compat::AddRect(dl,
             ImVec2(corners[i].x - kHandlePx * 0.5f, corners[i].y - kHandlePx * 0.5f),
             ImVec2(corners[i].x + kHandlePx * 0.5f, corners[i].y + kHandlePx * 0.5f),
             IM_COL32(0, 0, 0, 255), 0.0f, 0, 1.0f);
@@ -4060,7 +4061,7 @@ void Steam_Overlay::render_pinned_screenshot()
     if (pinned_screenshots.empty())
         return;
 
-    ImGui::PushFont(font_default);
+    overlay_imgui_compat::PushFont(font_default);
 
     // Track overlay state transitions once — applies to all pin windows.
     static bool prev_overlay_state = false;
