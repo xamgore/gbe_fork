@@ -143,7 +143,44 @@ static inline void reset_LastError()
     #include "crash_printer/linux.hpp"
 
     #define PATH_MAX_STRING_SIZE 512
-    #define PATH_SEPARATOR "/" 
+    #define PATH_SEPARATOR "/"
+    #define utf8_decode(a) a
+    #define utf8_encode(a) a
+    #define reset_LastError()
+
+#elif defined(__MACOS__)
+    #include <arpa/inet.h>
+
+    #include <sys/types.h>
+    #include <sys/stat.h>
+    #include <sys/ioctl.h>
+    #include <sys/socket.h>
+    #include <sys/statvfs.h>
+    #include <sys/time.h>
+
+    #include <netinet/in.h>
+    #include <netinet/tcp.h>
+    #include <net/if.h>
+
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <dirent.h>
+    #include <netdb.h>
+    #include <dlfcn.h>
+    #include <utime.h>
+    #include <pwd.h>
+
+    #include <mach-o/dyld.h> // _NSGetExecutablePath() in base.cpp
+
+    #include "crash_printer/linux.hpp" // sigaction + backtrace work on darwin too
+
+    // darwin has no MSG_NOSIGNAL, sockets get SO_NOSIGPIPE instead (network.cpp)
+    #ifndef MSG_NOSIGNAL
+        #define MSG_NOSIGNAL 0
+    #endif
+
+    #define PATH_MAX_STRING_SIZE 512
+    #define PATH_SEPARATOR "/"
     #define utf8_decode(a) a
     #define utf8_encode(a) a
     #define reset_LastError()
@@ -179,6 +216,11 @@ static inline void reset_LastError()
         #include <sys/syscall.h> // syscall
 
         #define PRINT_DEBUG_TID() (long long)syscall(SYS_gettid)
+        #define PRINT_DEBUG_CLEANUP() (void)0
+    #elif defined(__MACOS__)
+        #include <pthread.h>
+
+        #define PRINT_DEBUG_TID() (long long)pthread_mach_thread_np(pthread_self())
         #define PRINT_DEBUG_CLEANUP() (void)0
     #else
         #warning  "Unrecognized OS"

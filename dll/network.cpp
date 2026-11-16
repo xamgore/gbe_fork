@@ -84,13 +84,14 @@ static void get_broadcast_info(uint16 port)
     free(pAdapterInfo);
 }
 
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 
 static void get_broadcast_info(uint16 port)
 {
     /* Not sure how many platforms this will run on,
      * so it's wrapped in __linux for now.
      * Definitely won't work like this on Windows...
+     * (also works on macOS: SIOCGIFCONF/SIOCGIFBRDADDR + struct ifreq exist on darwin)
      */
     number_broadcasts = 0;
     sock_t sock = 0;
@@ -175,6 +176,11 @@ static int set_socket_nonblocking(sock_t sock)
     u_long mode = 1;
     return (ioctlsocket(sock, FIONBIO, &mode) == 0);
 #else
+    #if defined(__APPLE__)
+        // darwin has no MSG_NOSIGNAL, prevent SIGPIPE kills at the socket level
+        int nosigpipe = 1;
+        setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+    #endif
     return (fcntl(sock, F_SETFL, O_NONBLOCK, 1) == 0);
 #endif
 }
@@ -1364,7 +1370,13 @@ void Networking::startQuery(IP_PORT ip_port)
         {
             query_socket = static_cast<sock_t>(socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
             if (is_socket_valid(query_socket))
+            {
+#if defined(__APPLE__)
+                int nosigpipe = 1;
+                setsockopt(query_socket, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
                 break;
+            }
             if (retry > max_retry)
             {
                 reset_last_error();

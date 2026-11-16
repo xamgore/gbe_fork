@@ -436,7 +436,7 @@ std::string common_helpers::get_utc_time()
     std::tm utc_time{};
 
     bool is_ok = false;
-#if defined(__linux__) || defined(linux)
+#if defined(__linux__) || defined(linux) || defined(__APPLE__)
     {
         auto utc_ptr = std::gmtime(&time);
         if (utc_ptr) {

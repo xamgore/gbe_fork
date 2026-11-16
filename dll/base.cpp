@@ -191,11 +191,19 @@ std::string get_full_exe_path()
         path[1] = 0;
     }
     exe_path = canonical_path(utf8_encode(path));
+#elif defined(__MACOS__)
+    static char path[8192]{};
+    uint32_t path_size = sizeof(path);
+    if (_NSGetExecutablePath(path, &path_size) != 0 || path_size >= sizeof(path)) {
+        path[0] = '.';
+        path[1] = 0;
+    }
+    exe_path = canonical_path(path);
 #else
     // https://man7.org/linux/man-pages/man5/proc.5.html
     // https://linux.die.net/man/5/proc
     // https://man7.org/linux/man-pages/man2/readlink.2.html
-    // https://linux.die.net/man/3/readlink
+    // https://man7.org/linux/man-pages/man3/readlink
     static char path[8192]{};
     auto read = ::readlink("/proc/self/exe", path, sizeof(path) - 1);
     if (-1 == read) {
@@ -225,7 +233,7 @@ std::string get_exe_dirname()
 
 }
 
-#ifdef __LINUX__
+#if defined(__LINUX__) || defined(__MACOS__)
 std::string get_lib_path()
 {
     Dl_info info;
@@ -271,6 +279,8 @@ std::string get_current_path()
     std::string path;
 #if defined(STEAM_WIN32)
     char *buffer = _getcwd( NULL, 0 );
+#elif defined(__MACOS__)
+    char *buffer = getcwd( NULL, 0 );
 #else
     char *buffer = get_current_dir_name();
 #endif
@@ -293,7 +303,11 @@ std::string canonical_path(const std::string &path)
         free(buffer);
     }
 #else
-    char *buffer = canonicalize_file_name(path.c_str());
+    #if defined(__MACOS__)
+        char *buffer = realpath(path.c_str(), nullptr);
+    #else
+        char *buffer = canonicalize_file_name(path.c_str());
+    #endif
     if (buffer) {
         output = buffer;
         free(buffer);

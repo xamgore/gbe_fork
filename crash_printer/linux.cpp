@@ -7,7 +7,9 @@
 #include <chrono>
 #include <ctime>
 
+#if !defined(__APPLE__) // darwin gates ucontext.h behind _XOPEN_SOURCE; the handler only passes an opaque void*
 #include <ucontext.h>
+#endif
 #include <signal.h> // SIGBUS + SA_SIGINFO ...
 #include <string.h> // strsignal
 #include <execinfo.h> // backtrace + backtrace_symbols
