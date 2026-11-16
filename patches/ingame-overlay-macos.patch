@@ -1,0 +1,250 @@
+diff --git a/src/MacOSX/MetalHook.h b/src/MacOSX/MetalHook.h
+index e13f67c..8d564fd 100644
+--- a/src/MacOSX/MetalHook.h
++++ b/src/MacOSX/MetalHook.h
+@@ -27,6 +27,7 @@
+ #include <objc/runtime.h>
+ 
+ #include <filesystem>
++#include <atomic>
+ #include <functional>
+ #include <set>
+ #include <string>
+@@ -103,6 +104,7 @@ private:
+     std::vector<RendererTextureLoadParameter_t> _ImageResourcesToLoad;
+     std::vector<RendererTextureReleaseParameter_t> _ImageResourcesToRelease;
+     id<MTLDevice> _MetalDevice;
++    std::atomic_bool _OverlayProcessingEnabled{false};
+     std::vector<RenderPass_t> _RenderPass;
+ 
+     void* _ImGuiFontAtlas;
+@@ -119,6 +121,7 @@ private:
+     // Hook to render functions
+     Method _MTLCommandBufferRenderCommandEncoderWithDescriptorMethod;
+     Method _MTLCommandBufferPresentDrawableMethod;
++    Method _MTLCommandBufferCommitMethod;
+ 
+     id<MTLRenderCommandEncoder> (*_MTLCommandBufferRenderCommandEncoderWithDescriptor)(id<MTLCommandBuffer> self, SEL sel, MTLRenderPassDescriptor* descriptor);
+     void (*_MTLCommandBufferPresentDrawable)(id<MTLCommandBuffer> self, SEL sel, id<MTLDrawable> drawable);
+@@ -126,6 +129,7 @@ private:
+ public:
+     static id<MTLRenderCommandEncoder> MyMTLCommandBufferRenderCommandEncoderWithDescriptor(id<MTLCommandBuffer> self, SEL sel, MTLRenderPassDescriptor* descriptor);
+     static void MyMTLCommandBufferPresentDrawable(id<MTLCommandBuffer> self, SEL sel, id<MTLDrawable> drawable);
++    static void MyCAMetalDrawablePresent(id self, SEL sel);
+ 
+     virtual ~MetalHook_t() override;
+ 
+@@ -136,7 +140,7 @@ public:
+     static MetalHook_t* Inst();
+     virtual const char* GetLibraryName() const override;
+     virtual RendererHookType_t GetRendererHookType() const override;
+-    void LoadFunctions(Method MTLCommandBufferRenderCommandEncoderWithDescriptor, Method MTLCommandBufferPresentDrawable);
++    void LoadFunctions(Method MTLCommandBufferRenderCommandEncoderWithDescriptor, Method MTLCommandBufferPresentDrawable, Method MTLCommandBufferCommit);
+ 
+     virtual std::weak_ptr<RendererTexture_t> AllocImageResource() override;
+     virtual void LoadImageResource(RendererTextureLoadParameter_t& loadParameter) override;
+diff --git a/src/MacOSX/MetalHook.mm b/src/MacOSX/MetalHook.mm
+index a848693..db6eea4 100644
+--- a/src/MacOSX/MetalHook.mm
++++ b/src/MacOSX/MetalHook.mm
+@@ -23,11 +23,31 @@
+ #include <imgui.h>
+ #include <imgui_internal.h>
+ #include <backends/imgui_impl_metal.h>
++#include <mutex>
+ 
+ namespace InGameOverlay {
+ 
+ MetalHook_t* MetalHook_t::_Instance = nullptr;
+ 
++static std::mutex command_queue_mutex;
++static id<MTLCommandQueue> last_committed_queue = nil;
++static void (*original_drawable_present)(id, SEL) = nullptr;
++static void (*original_commit)(id, SEL) = nullptr;
++
++static void MyMTLCommandBufferCommit(id self, SEL sel)
++{
++    id<MTLCommandQueue> queue = [(id<MTLCommandBuffer>)self commandQueue];
++    if (queue) {
++        std::lock_guard<std::mutex> lock(command_queue_mutex);
++        if (queue != last_committed_queue) {
++            [queue retain];
++            [last_committed_queue release];
++            last_committed_queue = queue;
++        }
++    }
++    original_commit(self, sel);
++}
++
+ static InGameOverlay::ScreenshotDataFormat_t RendererFormatToScreenshotFormat(MTLPixelFormat format)
+ {
+     switch (format)
+@@ -65,7 +85,7 @@ bool MetalHook_t::StartHook(std::function<void()> keyCombinationCallback, Toggle
+ {
+     if (!_Hooked)
+     {
+-        if (_MTLCommandBufferRenderCommandEncoderWithDescriptorMethod == nil || _MTLCommandBufferPresentDrawableMethod == nil)
++        if (_MTLCommandBufferRenderCommandEncoderWithDescriptorMethod == nil || _MTLCommandBufferPresentDrawableMethod == nil || _MTLCommandBufferCommitMethod == nil)
+         {
+             INGAMEOVERLAY_WARN("Failed to hook Metal: Rendering functions missing.");
+             return false;
+@@ -78,6 +98,8 @@ bool MetalHook_t::StartHook(std::function<void()> keyCombinationCallback, Toggle
+ 
+         _MTLCommandBufferRenderCommandEncoderWithDescriptor = (decltype(_MTLCommandBufferRenderCommandEncoderWithDescriptor))method_setImplementation(_MTLCommandBufferRenderCommandEncoderWithDescriptorMethod, (IMP)&MyMTLCommandBufferRenderCommandEncoderWithDescriptor);
+         _MTLCommandBufferPresentDrawable = (decltype(_MTLCommandBufferPresentDrawable))method_setImplementation(_MTLCommandBufferPresentDrawableMethod,                                                                                  (IMP)&MyMTLCommandBufferPresentDrawable);
++        original_drawable_present = (decltype(original_drawable_present))method_setImplementation(class_getInstanceMethod(objc_getClass("CAMetalDrawable"), @selector(present)), (IMP)&MetalHook_t::MyCAMetalDrawablePresent);
++        original_commit = (decltype(original_commit))method_setImplementation(_MTLCommandBufferCommitMethod, (IMP)MyMTLCommandBufferCommit);
+ 
+         INGAMEOVERLAY_INFO("Hooked Metal");
+         _Hooked = true;
+@@ -96,6 +118,7 @@ void MetalHook_t::HideAppInputs(bool hide)
+ 
+ void MetalHook_t::HideOverlayInputs(bool hide)
+ {
++    _OverlayProcessingEnabled.store(!hide);
+     if (_Initialized)
+     {
+         NSViewHook_t::Inst()->HideOverlayInputs(hide);
+@@ -352,6 +375,26 @@ void MetalHook_t::MyMTLCommandBufferPresentDrawable(id<MTLCommandBuffer> self, S
+     inst->_MTLCommandBufferPresentDrawable(self, sel, drawable);
+ }
+ 
++void MetalHook_t::MyCAMetalDrawablePresent(id self, SEL sel)
++{
++    MetalHook_t* inst = MetalHook_t::Inst();
++    id<MTLTexture> texture = [(id<CAMetalDrawable>)self texture];
++    id<MTLCommandQueue> queue = nil;
++    {
++        std::lock_guard<std::mutex> lock(command_queue_mutex);
++        queue = [last_committed_queue retain];
++    }
++
++    if (inst->_Hooked && texture && queue && (!inst->_Initialized || inst->_OverlayProcessingEnabled.load())) {
++        id<MTLCommandBuffer> overlayBuffer = [queue commandBuffer];
++        inst->_PrepareForOverlay((id<MTLDrawable>)self, texture, overlayBuffer);
++        [overlayBuffer commit];
++        inst->_RenderPass.clear();
++    }
++    [queue release];
++    original_drawable_present(self, sel);
++}
++
+ MetalHook_t::MetalHook_t():
+     _Initialized(false),
+     _Hooked(false),
+@@ -359,6 +402,7 @@ MetalHook_t::MetalHook_t():
+     _MetalDevice(nil),
+     _MTLCommandBufferRenderCommandEncoderWithDescriptorMethod(nil),
+     _MTLCommandBufferPresentDrawableMethod(nil),
++    _MTLCommandBufferCommitMethod(nil),
+     _MTLCommandBufferRenderCommandEncoderWithDescriptor(nullptr),
+     _MTLCommandBufferPresentDrawable(nullptr)
+ {
+@@ -382,6 +426,19 @@ MetalHook_t::~MetalHook_t()
+         method_setImplementation(_MTLCommandBufferPresentDrawableMethod, (IMP)_MTLCommandBufferPresentDrawable);
+         _MTLCommandBufferPresentDrawable = nullptr;
+     }
++    if (original_drawable_present) {
++        method_setImplementation(class_getInstanceMethod(objc_getClass("CAMetalDrawable"), @selector(present)), (IMP)original_drawable_present);
++        original_drawable_present = nullptr;
++    }
++    if (original_commit) {
++        method_setImplementation(_MTLCommandBufferCommitMethod, (IMP)original_commit);
++        original_commit = nullptr;
++    }
++    {
++        std::lock_guard<std::mutex> lock(command_queue_mutex);
++        [last_committed_queue release];
++        last_committed_queue = nil;
++    }
+ 
+     if (_Initialized)
+     {
+@@ -412,10 +469,11 @@ RendererHookType_t MetalHook_t::GetRendererHookType() const
+     return RendererHookType_t::Metal;
+ }
+ 
+-void MetalHook_t::LoadFunctions(Method MTLCommandBufferRenderCommandEncoderWithDescriptor, Method MTLCommandBufferPresentDrawable)
++void MetalHook_t::LoadFunctions(Method MTLCommandBufferRenderCommandEncoderWithDescriptor, Method MTLCommandBufferPresentDrawable, Method MTLCommandBufferCommit)
+ {
+     _MTLCommandBufferRenderCommandEncoderWithDescriptorMethod = MTLCommandBufferRenderCommandEncoderWithDescriptor;
+     _MTLCommandBufferPresentDrawableMethod = MTLCommandBufferPresentDrawable;
++    _MTLCommandBufferCommitMethod = MTLCommandBufferCommit;
+ }
+ 
+ std::weak_ptr<RendererTexture_t> MetalHook_t::AllocImageResource()
+diff --git a/src/MacOSX/RendererDetector.mm b/src/MacOSX/RendererDetector.mm
+index 03760a7..e64661e 100644
+--- a/src/MacOSX/RendererDetector.mm
++++ b/src/MacOSX/RendererDetector.mm
+@@ -22,6 +22,8 @@
+ #endif
+ 
+ #include <random>
++#include <algorithm>
++#include <cstring>
+ #include <vector>
+ #include <filesystem>
+ #include <string>
+@@ -124,7 +126,7 @@ private:
+     CGLError (*_NSOpenGLContextFlushBuffer)(id self);
+     decltype(::CGLFlushDrawable)* _CGLFlushDrawable;
+ 
+-    std::array<MetalDriverHook_t, 3> _MetalDriversHooks = {
++    std::vector<MetalDriverHook_t> _MetalDriversHooks = {
+         MetalDriverHook_t{ "MTLIGAccelCommandBuffer"   , "MTLIGAccelRenderCommandEncoder"    , (IMP)&_MyIGAccelCommandBufferCommit      , nullptr, nil, nil, nil }, // IGAccel => Intel Graphics Acceleration
+         MetalDriverHook_t{ "NVMTLCommandBuffer"        , "NVMTLRenderCommandEncoder_PASCAL_B", (IMP)&_MyNVMTLCommandBufferCommit        , nullptr, nil, nil, nil }, // NVMTL => NVidia WebDriver
+         MetalDriverHook_t{ "AGXG13XFamilyCommandBuffer", "AGXG13XFamilyRenderContext"        , (IMP)&_MyAGXG13XFamilyCommandBufferCommit, nullptr, nil, nil, nil }, // AGXG13XFamily => Mac M1 ??
+@@ -199,7 +201,7 @@ private:
+         if (!_DetectionStarted || _DetectionDone)
+             return;
+ 
+-        _MetalHook->LoadFunctions(driverHook.CommandBufferRenderCommandWithDescriptorMethod, driverHook.CommandBufferPresentDrawableMethod);
++        _MetalHook->LoadFunctions(driverHook.CommandBufferRenderCommandWithDescriptorMethod, driverHook.CommandBufferPresentDrawableMethod, driverHook.CommandBufferCommitMethod);
+         _RendererHook = static_cast<InGameOverlay::RendererHook_t*>(_MetalHook);
+         _MetalHook = nullptr;
+         _StopHooks();
+@@ -225,6 +227,21 @@ private:
+         std::lock_guard<std::recursive_mutex> lk(inst->_RendererMutex);
+         inst->_FoundMetalRenderer(M1Driver, self, sel);
+     }
++
++    static void _MyAGXFamilyCommandBufferCommit(id self, SEL sel)
++    {
++        auto inst = Inst();
++        std::lock_guard<std::recursive_mutex> lk(inst->_RendererMutex);
++        for (Class cls = object_getClass(self); cls != nil; cls = class_getSuperclass(cls)) {
++            const char* name = class_getName(cls);
++            for (size_t i = 0; i < inst->_MetalDriversHooks.size(); ++i) {
++                if (strcmp(name, inst->_MetalDriversHooks[i].CommandBufferClass) == 0) {
++                    inst->_FoundMetalRenderer(static_cast<int>(i), self, sel);
++                    return;
++                }
++            }
++        }
++    }
+     
+     void _HookCGLFlushDrawable(decltype(::CGLFlushDrawable)* CGLFlushDrawable)
+     {
+@@ -287,6 +304,21 @@ private:
+                 return;
+             }
+ 
++            // Apple GPU driver class names change between chip generations.
++            // Discover the loaded AGX command buffers instead of naming M2/M3/M4/M5.
++            unsigned int class_count = 0;
++            Class* classes = objc_copyClassList(&class_count);
++            for (unsigned int i = 0; i < class_count; ++i) {
++                const char* name = class_getName(classes[i]);
++                if (strncmp(name, "AGX", 3) != 0 || strstr(name, "FamilyCommandBuffer") == nullptr)
++                    continue;
++                const bool known = std::any_of(_MetalDriversHooks.begin(), _MetalDriversHooks.end(),
++                    [name](const MetalDriverHook_t& hook) { return strcmp(name, hook.CommandBufferClass) == 0; });
++                if (!known)
++                    _MetalDriversHooks.push_back(MetalDriverHook_t{ name, "", (IMP)&_MyAGXFamilyCommandBufferCommit, nullptr, nil, nil, nil });
++            }
++            free(classes);
++
+             int hooked_count = 0;
+ 
+             Class metalClass;
