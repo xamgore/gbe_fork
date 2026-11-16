@@ -12,6 +12,12 @@
 # SPECIFIC
 /build
 /third-party
+/build_mac/build-*/
+/build_mac/deps/build-*/
+/build_mac/deps/install/
+/build_mac/deps/src/
+/build_mac/deps/tarballs/
+/dist/macos/
 
 # TOOLS
 
